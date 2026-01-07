@@ -26,6 +26,8 @@ set(qdldl_interface_sources
     ${amd_sources}
     ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_interface.h
     ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_interface.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_symbolic.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_symbolic.c
 )
 
 
@@ -43,4 +45,28 @@ target_include_directories(linsys_qdldl PRIVATE
                            ${csc_tools_includes}
                            ${osqp_api_includes}
                            ${kkt_common_includes})
+
+# Optional: CUDA batched GPU solver
+if(CUDA_SUPPORT OR CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+
+    set(qdldl_batch_gpu_sources
+        ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_batch_gpu.cuh
+        ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_batch_gpu.cu
+    )
+
+    add_library(linsys_qdldl_batch_gpu OBJECT ${qdldl_batch_gpu_sources})
+
+    target_include_directories(linsys_qdldl_batch_gpu PRIVATE
+                               ${qdldl_interface_includes}
+                               ${csc_tools_includes}
+                               ${osqp_api_includes}
+                               ${kkt_common_includes})
+
+    set_target_properties(linsys_qdldl_batch_gpu PROPERTIES
+                          CUDA_SEPARABLE_COMPILATION ON
+                          POSITION_INDEPENDENT_CODE ON)
+
+    message(STATUS "QDLDL batched GPU solver enabled")
+endif()
 
