@@ -349,6 +349,14 @@ GPUBatchWorkspace* alloc_gpu_workspace(const GPUFactorPattern* gpu_pattern, int 
     // d_Ax is allocated on demand by gpu_batch_factor_host
     ws->d_Ax = NULL;
 
+    // Persistent RHS/solution buffer for GPU-resident mode
+    cudaMalloc(&ws->d_x, batch_size * n * sizeof(QDLDL_float));
+
+    // CUDA Graph (not captured yet)
+    ws->cuda_graph = NULL;
+    ws->cuda_graph_exec = NULL;
+    ws->graph_captured = 0;
+
     return ws;
 }
 
@@ -362,6 +370,12 @@ void free_gpu_workspace(GPUBatchWorkspace* ws) {
         if (ws->d_iwork) cudaFree(ws->d_iwork);
         if (ws->d_bwork) cudaFree(ws->d_bwork);
         if (ws->d_Ax)    cudaFree(ws->d_Ax);
+        if (ws->d_x)     cudaFree(ws->d_x);
+
+        // Free CUDA graph resources
+        if (ws->cuda_graph_exec) cudaGraphExecDestroy((cudaGraphExec_t)ws->cuda_graph_exec);
+        if (ws->cuda_graph)      cudaGraphDestroy((cudaGraph_t)ws->cuda_graph);
+
         free(ws);
     }
 }
@@ -575,6 +589,247 @@ void gpu_get_permutation(
     QDLDL_int*              h_P
 ) {
     cudaMemcpy(h_P, gpu_pattern->d_P, gpu_pattern->n * sizeof(QDLDL_int), cudaMemcpyDeviceToHost);
+}
+
+//=============================================================================
+// GPU-Resident Data Functions
+//=============================================================================
+
+int gpu_copy_kkt_to_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      h_Ax_batch,
+    int                     batch_size
+) {
+    QDLDL_int nnz_KKT = gpu_pattern->nnz_KKT;
+    size_t size = batch_size * nnz_KKT * sizeof(QDLDL_float);
+
+    // Allocate device memory if not already allocated
+    if (!workspace->d_Ax) {
+        cudaError_t err = cudaMalloc(&workspace->d_Ax, size);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA malloc error: %s\n", cudaGetErrorString(err));
+            return -1;
+        }
+    }
+
+    // Copy KKT values to device
+    cudaError_t err = cudaMemcpy(workspace->d_Ax, h_Ax_batch, size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA memcpy error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    return 0;
+}
+
+int gpu_copy_rhs_to_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      h_x_batch,
+    int                     batch_size
+) {
+    QDLDL_int n = gpu_pattern->n;
+    size_t size = batch_size * n * sizeof(QDLDL_float);
+
+    cudaError_t err = cudaMemcpy(workspace->d_x, h_x_batch, size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA memcpy error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    return 0;
+}
+
+int gpu_copy_solution_to_host(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    QDLDL_float*            h_x_batch,
+    int                     batch_size
+) {
+    QDLDL_int n = gpu_pattern->n;
+    size_t size = batch_size * n * sizeof(QDLDL_float);
+
+    cudaError_t err = cudaMemcpy(h_x_batch, workspace->d_x, size, cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA memcpy error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    return 0;
+}
+
+int gpu_batch_factor_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+) {
+    // Use the d_Ax buffer that was populated by gpu_copy_kkt_to_device
+    if (!workspace->d_Ax) {
+        fprintf(stderr, "Error: KKT data not copied to device. Call gpu_copy_kkt_to_device first.\n");
+        return -1;
+    }
+
+    return gpu_batch_factor(gpu_pattern, workspace, workspace->d_Ax, batch_size);
+}
+
+int gpu_batch_solve_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+) {
+    // Use the d_x buffer that was populated by gpu_copy_rhs_to_device
+    return gpu_batch_solve(gpu_pattern, workspace, workspace->d_x, batch_size);
+}
+
+//=============================================================================
+// CUDA Graph Functions
+//=============================================================================
+
+int gpu_capture_graph(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+) {
+    // Free existing graph if any
+    if (workspace->cuda_graph_exec) {
+        cudaGraphExecDestroy((cudaGraphExec_t)workspace->cuda_graph_exec);
+        workspace->cuda_graph_exec = NULL;
+    }
+    if (workspace->cuda_graph) {
+        cudaGraphDestroy((cudaGraph_t)workspace->cuda_graph);
+        workspace->cuda_graph = NULL;
+    }
+    workspace->graph_captured = 0;
+
+    // Ensure d_Ax and d_x are allocated
+    if (!workspace->d_Ax) {
+        QDLDL_int nnz_KKT = gpu_pattern->nnz_KKT;
+        cudaError_t err = cudaMalloc(&workspace->d_Ax, batch_size * nnz_KKT * sizeof(QDLDL_float));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA malloc error: %s\n", cudaGetErrorString(err));
+            return -1;
+        }
+    }
+
+    cudaGraph_t graph;
+    cudaGraphExec_t graphExec;
+
+    // Begin capture
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
+    cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA stream begin capture error: %s\n", cudaGetErrorString(err));
+        cudaStreamDestroy(stream);
+        return -1;
+    }
+
+    // Launch factorization kernel (captured)
+    int threads_per_block = 256;
+    int num_blocks = (batch_size + threads_per_block - 1) / threads_per_block;
+
+    kernel_batch_factor<<<num_blocks, threads_per_block, 0, stream>>>(
+        gpu_pattern->n,
+        gpu_pattern->nnz_L,
+        gpu_pattern->d_Ap,
+        gpu_pattern->d_Ai,
+        gpu_pattern->d_Lp,
+        gpu_pattern->d_Li,
+        gpu_pattern->d_Lnz,
+        gpu_pattern->d_etree,
+        workspace->d_Ax,
+        workspace->d_Lx,
+        workspace->d_D,
+        workspace->d_Dinv,
+        workspace->d_bwork,
+        workspace->d_iwork,
+        workspace->d_fwork,
+        gpu_pattern->nnz_KKT,
+        batch_size
+    );
+
+    // Launch solve kernel (captured)
+    kernel_batch_solve<<<num_blocks, threads_per_block, 0, stream>>>(
+        gpu_pattern->n,
+        gpu_pattern->d_Lp,
+        gpu_pattern->d_Li,
+        gpu_pattern->d_P,
+        workspace->d_Lx,
+        workspace->d_Dinv,
+        workspace->d_x,
+        workspace->d_work,
+        gpu_pattern->nnz_L,
+        batch_size
+    );
+
+    // End capture
+    err = cudaStreamEndCapture(stream, &graph);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA stream end capture error: %s\n", cudaGetErrorString(err));
+        cudaStreamDestroy(stream);
+        return -1;
+    }
+
+    // Instantiate the graph
+    err = cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA graph instantiate error: %s\n", cudaGetErrorString(err));
+        cudaGraphDestroy(graph);
+        cudaStreamDestroy(stream);
+        return -1;
+    }
+
+    workspace->cuda_graph = (void*)graph;
+    workspace->cuda_graph_exec = (void*)graphExec;
+    workspace->graph_captured = 1;
+
+    cudaStreamDestroy(stream);
+    return 0;
+}
+
+int gpu_batch_factor_solve_graph(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+) {
+    (void)gpu_pattern;  // unused
+    (void)batch_size;   // unused (captured in graph)
+
+    if (!workspace->graph_captured || !workspace->cuda_graph_exec) {
+        fprintf(stderr, "Error: CUDA graph not captured. Call gpu_capture_graph first.\n");
+        return -1;
+    }
+
+    cudaError_t err = cudaGraphLaunch((cudaGraphExec_t)workspace->cuda_graph_exec, 0);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA graph launch error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    // Synchronize to ensure completion
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA sync error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    return 0;
+}
+
+void gpu_free_graph(GPUBatchWorkspace* workspace) {
+    if (workspace) {
+        if (workspace->cuda_graph_exec) {
+            cudaGraphExecDestroy((cudaGraphExec_t)workspace->cuda_graph_exec);
+            workspace->cuda_graph_exec = NULL;
+        }
+        if (workspace->cuda_graph) {
+            cudaGraphDestroy((cudaGraph_t)workspace->cuda_graph);
+            workspace->cuda_graph = NULL;
+        }
+        workspace->graph_captured = 0;
+    }
 }
 
 } // extern "C"

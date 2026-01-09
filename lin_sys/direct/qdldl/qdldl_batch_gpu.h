@@ -44,6 +44,14 @@ typedef struct {
 
     // Device memory for KKT values (allocated separately)
     QDLDL_float* d_Ax;          // [batch_size * nnz_KKT]
+
+    // Persistent device buffer for RHS/solution (GPU-resident mode)
+    QDLDL_float* d_x;           // [batch_size * n]
+
+    // CUDA Graph for reduced kernel launch overhead
+    void* cuda_graph;           // cudaGraph_t (opaque pointer for C compatibility)
+    void* cuda_graph_exec;      // cudaGraphExec_t
+    int   graph_captured;       // 1 if graph is ready to use
 } GPUBatchWorkspace;
 
 /**
@@ -188,6 +196,94 @@ void gpu_get_permutation(
     const GPUFactorPattern* gpu_pattern,
     QDLDL_int*              h_P
 );
+
+//=============================================================================
+// GPU-Resident Data Functions (avoid host<->device transfers)
+//=============================================================================
+
+/**
+ * Copy KKT batch data from host to persistent device buffer
+ * Call this once, then use gpu_batch_factor_device for repeated factorizations
+ */
+int gpu_copy_kkt_to_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      h_Ax_batch,
+    int                     batch_size
+);
+
+/**
+ * Copy RHS batch data from host to persistent device buffer
+ * Call this once, then use gpu_batch_solve_device for repeated solves
+ */
+int gpu_copy_rhs_to_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      h_x_batch,
+    int                     batch_size
+);
+
+/**
+ * Copy solution batch data from device buffer to host
+ */
+int gpu_copy_solution_to_host(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    QDLDL_float*            h_x_batch,
+    int                     batch_size
+);
+
+/**
+ * Factorize using data already on device (no host transfer)
+ * Must call gpu_copy_kkt_to_device first
+ */
+int gpu_batch_factor_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+);
+
+/**
+ * Solve using data already on device (no host transfer)
+ * Must call gpu_copy_rhs_to_device first, factorization must be done
+ */
+int gpu_batch_solve_device(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+);
+
+//=============================================================================
+// CUDA Graph Functions (reduced kernel launch overhead)
+//=============================================================================
+
+/**
+ * Capture factor+solve sequence into a CUDA graph
+ * After capturing, use gpu_batch_factor_solve_graph for faster execution
+ * @return 0 on success
+ */
+int gpu_capture_graph(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+);
+
+/**
+ * Execute factor+solve using captured CUDA graph (lowest overhead)
+ * Must call gpu_capture_graph first
+ * Data must already be on device (use gpu_copy_kkt_to_device, gpu_copy_rhs_to_device)
+ * @return 0 on success
+ */
+int gpu_batch_factor_solve_graph(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    int                     batch_size
+);
+
+/**
+ * Free CUDA graph resources
+ */
+void gpu_free_graph(GPUBatchWorkspace* workspace);
 
 #ifdef __cplusplus
 }

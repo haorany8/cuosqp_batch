@@ -28,14 +28,15 @@
 #include "qdldl_cuda_batch_interface.h"
 #include "qdldl_symbolic.h"
 #include "qdldl_batch_gpu.h"
+#include <cuda_runtime.h>
 
 /* Configurable parameters - adjust to test different scales */
 #ifndef BATCH_SIZE
-#define BATCH_SIZE 200
+#define BATCH_SIZE 400
 #endif
 
 #ifndef PROBLEM_N
-#define PROBLEM_N 500
+#define PROBLEM_N 1000
 #endif
 
 #ifndef PROBLEM_M
@@ -339,9 +340,9 @@ int main(int argc, char **argv) {
            cpu_time, cpu_time / BATCH_SIZE);
 
     /* ========================================
-     * GPU benchmark: parallel factor + solve
+     * GPU benchmark Mode 1: With host transfers (original)
      * ======================================== */
-    printf("\n--- GPU: Parallel factorization + solve ---\n");
+    printf("\n--- GPU Mode 1: With host<->device transfers ---\n");
 
     GPUFactorPattern *gpu_pattern = (GPUFactorPattern *)cuda_solver->gpu_pattern;
     GPUBatchWorkspace *gpu_workspace = (GPUBatchWorkspace *)cuda_solver->gpu_workspace;
@@ -362,9 +363,99 @@ int main(int argc, char **argv) {
         printf("ERROR: GPU batch solve failed (status=%d)\n", (int)status);
     }
 
-    double cuda_time = timer_stop(&timer);
-    printf("GPU time: %.3f ms total (%.4f ms per factor+solve)\n",
-           cuda_time, cuda_time / BATCH_SIZE);
+    double cuda_time_host = timer_stop(&timer);
+    printf("GPU (with transfers): %.3f ms total (%.4f ms per factor+solve)\n",
+           cuda_time_host, cuda_time_host / BATCH_SIZE);
+
+    /* Save Mode 1 solution for comparison (before other modes modify it) */
+    c_float *sol_cuda_mode1 = (c_float *)c_malloc(BATCH_SIZE * n_plus_m * sizeof(c_float));
+    memcpy(sol_cuda_mode1, sol_cuda, BATCH_SIZE * n_plus_m * sizeof(c_float));
+
+    /* ========================================
+     * GPU benchmark Mode 2: GPU-resident (no transfers in compute)
+     * ======================================== */
+    printf("\n--- GPU Mode 2: GPU-resident (transfers separated) ---\n");
+
+    /* First, copy data to GPU (this is done once upfront) */
+    timer_start(&timer);
+    status = gpu_copy_kkt_to_device(gpu_pattern, gpu_workspace,
+                                    (const QDLDL_float *)h_KKT_batch, BATCH_SIZE);
+    double transfer_kkt_time = timer_stop(&timer);
+
+    timer_start(&timer);
+    memcpy(sol_cuda, rhs_batch, BATCH_SIZE * n_plus_m * sizeof(c_float));
+    status = gpu_copy_rhs_to_device(gpu_pattern, gpu_workspace,
+                                    (const QDLDL_float *)sol_cuda, BATCH_SIZE);
+    double transfer_rhs_time = timer_stop(&timer);
+
+    printf("Transfer KKT to GPU: %.3f ms\n", transfer_kkt_time);
+    printf("Transfer RHS to GPU: %.3f ms\n", transfer_rhs_time);
+
+    /* Now benchmark compute-only (data already on GPU) */
+    timer_start(&timer);
+    status = gpu_batch_factor_device(gpu_pattern, gpu_workspace, BATCH_SIZE);
+    if (status != 0) {
+        printf("ERROR: GPU batch factorization (device) failed (status=%d)\n", (int)status);
+    }
+    status = gpu_batch_solve_device(gpu_pattern, gpu_workspace, BATCH_SIZE);
+    if (status != 0) {
+        printf("ERROR: GPU batch solve (device) failed (status=%d)\n", (int)status);
+    }
+    cudaDeviceSynchronize();
+    double cuda_time_device = timer_stop(&timer);
+
+    /* Copy solution back */
+    timer_start(&timer);
+    status = gpu_copy_solution_to_host(gpu_pattern, gpu_workspace,
+                                       (QDLDL_float *)sol_cuda, BATCH_SIZE);
+    double transfer_sol_time = timer_stop(&timer);
+
+    printf("Compute only (GPU-resident): %.3f ms (%.4f ms per factor+solve)\n",
+           cuda_time_device, cuda_time_device / BATCH_SIZE);
+    printf("Transfer solution to host: %.3f ms\n", transfer_sol_time);
+
+    /* ========================================
+     * GPU benchmark Mode 3: CUDA Graph (lowest overhead)
+     * ======================================== */
+    printf("\n--- GPU Mode 3: CUDA Graph (captured kernel sequence) ---\n");
+
+    /* Capture the graph */
+    timer_start(&timer);
+    status = gpu_capture_graph(gpu_pattern, gpu_workspace, BATCH_SIZE);
+    double graph_capture_time = timer_stop(&timer);
+    if (status != 0) {
+        printf("ERROR: CUDA graph capture failed (status=%d)\n", (int)status);
+    } else {
+        printf("Graph capture time: %.3f ms (one-time cost)\n", graph_capture_time);
+
+        /* Re-copy data since graph uses internal buffers */
+        gpu_copy_kkt_to_device(gpu_pattern, gpu_workspace,
+                               (const QDLDL_float *)h_KKT_batch, BATCH_SIZE);
+        memcpy(sol_cuda, rhs_batch, BATCH_SIZE * n_plus_m * sizeof(c_float));
+        gpu_copy_rhs_to_device(gpu_pattern, gpu_workspace,
+                               (const QDLDL_float *)sol_cuda, BATCH_SIZE);
+
+        /* Execute graph multiple times for averaging */
+        int num_runs = 10;
+        timer_start(&timer);
+        for (int run = 0; run < num_runs; run++) {
+            status = gpu_batch_factor_solve_graph(gpu_pattern, gpu_workspace, BATCH_SIZE);
+            if (status != 0) {
+                printf("ERROR: CUDA graph execution failed (status=%d)\n", (int)status);
+                break;
+            }
+        }
+        double cuda_time_graph = timer_stop(&timer) / num_runs;
+
+        printf("Graph execution: %.3f ms (%.4f ms per factor+solve, avg of %d runs)\n",
+               cuda_time_graph, cuda_time_graph / BATCH_SIZE, num_runs);
+
+        /* Copy final solution */
+        gpu_copy_solution_to_host(gpu_pattern, gpu_workspace,
+                                  (QDLDL_float *)sol_cuda, BATCH_SIZE);
+    }
+
+    double cuda_time = cuda_time_host;  /* Use host-transfer version for comparison */
 
     /* ========================================
      * Compare results
@@ -381,7 +472,7 @@ int main(int argc, char **argv) {
 
     for (c_int i = 0; i < BATCH_SIZE; i++) {
         c_float *cpu_sol = sol_cpu + i * n_plus_m;
-        c_float *cuda_sol = sol_cuda + i * n_plus_m;
+        c_float *cuda_sol = sol_cuda_mode1 + i * n_plus_m;  /* Use Mode 1 solution */
 
         c_float abs_diff = vec_norm_inf_diff(cpu_sol, cuda_sol, n_plus_m);
         c_float cpu_norm = vec_norm_inf(cpu_sol, n_plus_m);
@@ -453,6 +544,7 @@ int main(int argc, char **argv) {
     c_free(rhs_batch);
     c_free(sol_cpu);
     c_free(sol_cuda);
+    c_free(sol_cuda_mode1);
     c_free(cpu_Lx);
     c_free(cpu_D);
     c_free(cpu_Dinv);
