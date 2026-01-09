@@ -51,8 +51,11 @@ if(CUDA_SUPPORT OR CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
 
     set(qdldl_batch_gpu_sources
+        ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_batch_gpu.h
         ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_batch_gpu.cuh
         ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_batch_gpu.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_cuda_batch_interface.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/qdldl_cuda_batch_interface.c
     )
 
     add_library(linsys_qdldl_batch_gpu OBJECT ${qdldl_batch_gpu_sources})

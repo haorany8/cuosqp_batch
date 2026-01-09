@@ -8,6 +8,7 @@ add_subdirectory(primal_infeasibility)
 add_subdirectory(solve_linsys)
 add_subdirectory(unconstrained)
 add_subdirectory(update_matrices)
+add_subdirectory(qdldl_batch)
 
 set(test_headers ${headers} PARENT_SCOPE)
 set(codegen_test_headers ${codegen_headers} PARENT_SCOPE)

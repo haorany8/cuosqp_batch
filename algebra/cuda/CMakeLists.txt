@@ -21,11 +21,21 @@ set(algebra_impl_headers
     ${CMAKE_CURRENT_SOURCE_DIR}/include/cuda_wrapper.h
 )
 
-if (IS_WINDOWS)
-    set(helper_cuda_header_dir $ENV{NVCUDASAMPLES_ROOT}/common/inc)
-else ()
-    set(helper_cuda_header_dir ${CUDA_TOOLKIT_ROOT_DIR}/samples/common/inc)
+# Find CUDA samples helper headers
+set(CUDA_SAMPLES_COMMON_DIR "" CACHE PATH "Path to CUDA samples Common directory")
+if(NOT CUDA_SAMPLES_COMMON_DIR)
+    # Try common locations
+    if(EXISTS "/home/chiang/opt/cuda-samples/Common")
+        set(CUDA_SAMPLES_COMMON_DIR "/home/chiang/opt/cuda-samples/Common")
+    elseif(EXISTS "${CUDA_TOOLKIT_ROOT_DIR}/samples/common/inc")
+        set(CUDA_SAMPLES_COMMON_DIR "${CUDA_TOOLKIT_ROOT_DIR}/samples/common/inc")
+    elseif(EXISTS "$ENV{HOME}/cuda-samples/Common")
+        set(CUDA_SAMPLES_COMMON_DIR "$ENV{HOME}/cuda-samples/Common")
+    elseif(IS_WINDOWS AND DEFINED ENV{NVCUDASAMPLES_ROOT})
+        set(CUDA_SAMPLES_COMMON_DIR "$ENV{NVCUDASAMPLES_ROOT}/common/inc")
+    endif()
 endif()
+set(helper_cuda_header_dir ${CUDA_SAMPLES_COMMON_DIR})
 
 set(algebra_impl_includes
     ${CMAKE_CURRENT_SOURCE_DIR}

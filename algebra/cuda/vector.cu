@@ -43,6 +43,7 @@ OSQPVectorf* OSQPVectorf_malloc(c_int length) {
   if (!b) return OSQP_NULL;
 
   b->length = length;
+  b->h_val = OSQP_NULL;  /* Lazy allocation on first access */
   if (length) {
     cuda_malloc((void **) &b->d_val, length * sizeof(c_float));
     if (!(b->d_val)) {
@@ -81,6 +82,7 @@ OSQPVectorf* OSQPVectorf_calloc(c_int length) {
   if (!b) return OSQP_NULL;
 
   b->length = length;
+  b->h_val = OSQP_NULL;  /* Lazy allocation on first access */
   if (length) {
     cuda_calloc((void **) &b->d_val, length * sizeof(c_float));
     if (!(b->d_val)) {
@@ -124,7 +126,10 @@ OSQPVectorf* OSQPVectorf_copy_new(const OSQPVectorf *a) {
 
 void OSQPVectorf_free(OSQPVectorf *a) {
 
-  if (a) cuda_free((void **) &a->d_val);
+  if (a) {
+    cuda_free((void **) &a->d_val);
+    if (a->h_val) c_free(a->h_val);
+  }
   c_free(a);
 }
 
@@ -142,16 +147,35 @@ OSQPVectorf* OSQPVectorf_view(const OSQPVectorf *a,
   if (view) {
     view->length = length;
     view->d_val  = a->d_val  + head;
+    view->h_val  = OSQP_NULL;  /* Views have their own h_val cache if needed */
   }
   return view;
 }
 
 void OSQPVectorf_view_free(OSQPVectorf *a) {
+  if (a && a->h_val) c_free(a->h_val);
   c_free(a);
 }
 
 c_int OSQPVectorf_length(const OSQPVectorf *a) {return a->length;}
 c_int OSQPVectori_length(const OSQPVectori *a) {return a->length;}
+
+/* Return pointer to host-side copy of data (syncs from GPU if needed) */
+c_float* OSQPVectorf_data(const OSQPVectorf *a) {
+  if (!a || a->length == 0) return OSQP_NULL;
+
+  /* Allocate host cache if needed */
+  OSQPVectorf *a_mut = (OSQPVectorf *)a;  /* Cast away const for lazy init */
+  if (!a_mut->h_val) {
+    a_mut->h_val = (c_float *)c_malloc(a->length * sizeof(c_float));
+    if (!a_mut->h_val) return OSQP_NULL;
+  }
+
+  /* Copy from GPU to host */
+  cuda_vec_copy_d2h(a_mut->h_val, a->d_val, a->length);
+
+  return a_mut->h_val;
+}
 
 void OSQPVectorf_copy(OSQPVectorf       *b,
                       const OSQPVectorf *a) {

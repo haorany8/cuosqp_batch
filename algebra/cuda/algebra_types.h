@@ -24,6 +24,7 @@ extern "C" {
 
 
 #include "osqp_api_types.h"
+#include "csc_utils.h"  /* for csc type */
 
 
 /*********************************************
@@ -39,6 +40,7 @@ struct OSQPVectori_ {
 struct OSQPVectorf_ {
   c_float *d_val;
   c_int    length;
+  c_float *h_val;  /* Host-side cache for CPU access */
 };
 
 
@@ -59,6 +61,9 @@ struct OSQPMatrix_ {
   c_int   *d_P_diag_ind;
   c_int    P_triu_nnz;
   c_int    symmetric;
+
+  /* Host-side copy of original CSC data for CPU-side operations */
+  csc     *csc_cpu;
 };
 
 

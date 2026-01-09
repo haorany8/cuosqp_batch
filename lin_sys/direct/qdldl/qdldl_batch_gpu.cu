@@ -1,3 +1,4 @@
+#include "qdldl_batch_gpu.h"
 #include "qdldl_batch_gpu.cuh"
 #include "qdldl_symbolic.h"
 #include <cuda_runtime.h>
@@ -345,6 +346,9 @@ GPUBatchWorkspace* alloc_gpu_workspace(const GPUFactorPattern* gpu_pattern, int 
     cudaMalloc(&ws->d_iwork, batch_size * 3 * n * sizeof(QDLDL_int));
     cudaMalloc(&ws->d_bwork, batch_size * n * sizeof(QDLDL_bool));
 
+    // d_Ax is allocated on demand by gpu_batch_factor_host
+    ws->d_Ax = NULL;
+
     return ws;
 }
 
@@ -357,6 +361,7 @@ void free_gpu_workspace(GPUBatchWorkspace* ws) {
         if (ws->d_fwork) cudaFree(ws->d_fwork);
         if (ws->d_iwork) cudaFree(ws->d_iwork);
         if (ws->d_bwork) cudaFree(ws->d_bwork);
+        if (ws->d_Ax)    cudaFree(ws->d_Ax);
         free(ws);
     }
 }
@@ -442,6 +447,134 @@ int gpu_batch_factor_solve(
 
     ret = gpu_batch_solve(gpu_pattern, workspace, d_x_batch, batch_size);
     return ret;
+}
+
+int gpu_batch_factor_host(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      h_Ax_batch,
+    int                     batch_size
+) {
+    QDLDL_int nnz_KKT = gpu_pattern->nnz_KKT;
+    size_t size = batch_size * nnz_KKT * sizeof(QDLDL_float);
+
+    // Allocate device memory if not already allocated
+    if (!workspace->d_Ax) {
+        cudaError_t err = cudaMalloc(&workspace->d_Ax, size);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA malloc error: %s\n", cudaGetErrorString(err));
+            return -1;
+        }
+    }
+
+    // Copy KKT values to device
+    cudaError_t err = cudaMemcpy(workspace->d_Ax, h_Ax_batch, size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA memcpy error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    // Call the device memory version
+    return gpu_batch_factor(gpu_pattern, workspace, workspace->d_Ax, batch_size);
+}
+
+int gpu_batch_factor_broadcast_host(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      h_Ax,
+    int                     batch_size
+) {
+    QDLDL_int nnz_KKT = gpu_pattern->nnz_KKT;
+    size_t single_size = nnz_KKT * sizeof(QDLDL_float);
+    size_t total_size = batch_size * single_size;
+
+    // Allocate device memory if not already allocated
+    if (!workspace->d_Ax) {
+        cudaError_t err = cudaMalloc(&workspace->d_Ax, total_size);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA malloc error: %s\n", cudaGetErrorString(err));
+            return -1;
+        }
+    }
+
+    // Broadcast: copy the single KKT to all batch elements
+    for (int i = 0; i < batch_size; i++) {
+        QDLDL_float* dst = workspace->d_Ax + i * nnz_KKT;
+        cudaError_t err = cudaMemcpy(dst, h_Ax, single_size, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA memcpy error: %s\n", cudaGetErrorString(err));
+            return -1;
+        }
+    }
+
+    // Call the device memory version
+    return gpu_batch_factor(gpu_pattern, workspace, workspace->d_Ax, batch_size);
+}
+
+int gpu_batch_solve_host(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    QDLDL_float*            h_x_batch,
+    int                     batch_size
+) {
+    QDLDL_int n = gpu_pattern->n;
+    size_t size = batch_size * n * sizeof(QDLDL_float);
+
+    // Allocate temporary device buffer
+    QDLDL_float* d_x_batch;
+    cudaError_t err = cudaMalloc(&d_x_batch, size);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA malloc error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    // Copy RHS to device
+    err = cudaMemcpy(d_x_batch, h_x_batch, size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        cudaFree(d_x_batch);
+        fprintf(stderr, "CUDA memcpy error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    // Solve on device
+    int ret = gpu_batch_solve(gpu_pattern, workspace, d_x_batch, batch_size);
+
+    if (ret == 0) {
+        // Copy solution back to host
+        err = cudaMemcpy(h_x_batch, d_x_batch, size, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            ret = -1;
+        }
+    }
+
+    cudaFree(d_x_batch);
+    return ret;
+}
+
+void gpu_get_factor_values(
+    const GPUFactorPattern* gpu_pattern,
+    const GPUBatchWorkspace* workspace,
+    QDLDL_float*            h_Lx,
+    QDLDL_float*            h_Dinv,
+    int                     batch_idx
+) {
+    QDLDL_int n = gpu_pattern->n;
+    QDLDL_int nnz_L = gpu_pattern->nnz_L;
+
+    // Copy Lx for specified batch element
+    const QDLDL_float* d_Lx = workspace->d_Lx + batch_idx * nnz_L;
+    cudaMemcpy(h_Lx, d_Lx, nnz_L * sizeof(QDLDL_float), cudaMemcpyDeviceToHost);
+
+    // Copy Dinv for specified batch element
+    const QDLDL_float* d_Dinv = workspace->d_Dinv + batch_idx * n;
+    cudaMemcpy(h_Dinv, d_Dinv, n * sizeof(QDLDL_float), cudaMemcpyDeviceToHost);
+}
+
+void gpu_get_permutation(
+    const GPUFactorPattern* gpu_pattern,
+    QDLDL_int*              h_P
+) {
+    cudaMemcpy(h_P, gpu_pattern->d_P, gpu_pattern->n * sizeof(QDLDL_int), cudaMemcpyDeviceToHost);
 }
 
 } // extern "C"

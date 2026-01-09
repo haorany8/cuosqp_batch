@@ -22,6 +22,41 @@
 #include "cuda_csr.h"
 #include "cuda_lin_alg.h"
 #include "cuda_malloc.h"
+#include "csc_utils.h"
+
+/* Helper function to copy CSC matrix */
+static csc* copy_csc(const csc *M) {
+  if (!M) return OSQP_NULL;
+
+  c_int n = M->n;
+  c_int nnz = M->p[n];
+
+  csc *out = (csc *)c_calloc(1, sizeof(csc));
+  if (!out) return OSQP_NULL;
+
+  out->m = M->m;
+  out->n = M->n;
+  out->nzmax = nnz;
+  out->nz = -1;  /* CSC format */
+
+  out->p = (c_int *)c_malloc((n + 1) * sizeof(c_int));
+  out->i = (c_int *)c_malloc(nnz * sizeof(c_int));
+  out->x = (c_float *)c_malloc(nnz * sizeof(c_float));
+
+  if (!out->p || !out->i || !out->x) {
+    if (out->p) c_free(out->p);
+    if (out->i) c_free(out->i);
+    if (out->x) c_free(out->x);
+    c_free(out);
+    return OSQP_NULL;
+  }
+
+  memcpy(out->p, M->p, (n + 1) * sizeof(c_int));
+  memcpy(out->i, M->i, nnz * sizeof(c_int));
+  memcpy(out->x, M->x, nnz * sizeof(c_float));
+
+  return out;
+}
 
 
 /*******************************************************************************
@@ -33,6 +68,13 @@ OSQPMatrix* OSQPMatrix_new_from_csc(const csc *M,
 
   OSQPMatrix* out = (OSQPMatrix *) c_calloc(1, sizeof(OSQPMatrix));
   if (!out) return OSQP_NULL;
+
+  /* Keep a CPU copy of the original CSC data */
+  out->csc_cpu = copy_csc(M);
+  if (!out->csc_cpu) {
+    c_free(out);
+    return OSQP_NULL;
+  }
 
   if (is_triu) {
     /* Initialize P */
@@ -68,6 +110,13 @@ c_int OSQPMatrix_get_m( const OSQPMatrix *mat) { return mat->S->m; }
 c_int OSQPMatrix_get_n( const OSQPMatrix *mat) { return mat->S->n; }
 
 c_int OSQPMatrix_get_nz(const OSQPMatrix *mat) { return mat->symmetric ? mat->P_triu_nnz : mat->S->nnz; }
+
+/* CPU-side CSC accessors for hybrid CPU/GPU operations */
+c_int*   OSQPMatrix_get_p(const OSQPMatrix *mat) { return mat->csc_cpu ? mat->csc_cpu->p : OSQP_NULL; }
+
+c_int*   OSQPMatrix_get_i(const OSQPMatrix *mat) { return mat->csc_cpu ? mat->csc_cpu->i : OSQP_NULL; }
+
+c_float* OSQPMatrix_get_x(const OSQPMatrix *mat) { return mat->csc_cpu ? mat->csc_cpu->x : OSQP_NULL; }
 
 void OSQPMatrix_mult_scalar(OSQPMatrix *mat,
                             c_float     sc) {
@@ -146,6 +195,10 @@ void OSQPMatrix_free(OSQPMatrix *mat){
     cuda_free((void **) &mat->d_P_triu_to_full_ind);
     cuda_free((void **) &mat->d_P_diag_ind);
     cuda_free((void **) &mat->d_P_triu_val);
+    /* Free CPU-side CSC copy */
+    if (mat->csc_cpu) {
+      csc_spfree(mat->csc_cpu);
+    }
     c_free(mat);
   }
 }

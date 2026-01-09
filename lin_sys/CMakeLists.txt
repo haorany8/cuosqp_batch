@@ -14,8 +14,11 @@ if (CUDA_SUPPORT)
   # CUDA solvers
   add_subdirectory(cuda)
 
-  set(linsys_solvers ${cuda_linsys_solvers})
-  set(linsys_solvers_includes ${cuda_linsys_solvers_includes})
+  # Also build direct solvers (needed for qdldl interface)
+  add_subdirectory(direct)
+
+  set(linsys_solvers ${cuda_linsys_solvers} ${direct_linsys_solvers})
+  set(linsys_solvers_includes ${cuda_linsys_solvers_includes} ${direct_linsys_solvers_includes})
 
 else()
 

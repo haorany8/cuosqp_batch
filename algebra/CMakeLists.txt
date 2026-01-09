@@ -35,14 +35,19 @@ add_subdirectory(${ALGEBRA})
 
 if (CUDA_SUPPORT)
 
-  # Create object library for algebra
-  add_library(osqp_algebra OBJECT ${algebra_impl})
+  # Also include csc_tools for direct solvers (qdldl interface)
+  add_subdirectory(csc_tools)
+
+  # Create object library for algebra (include csc_tools sources)
+  add_library(osqp_algebra OBJECT ${algebra_impl} ${csc_tools})
   target_include_directories(osqp_algebra PRIVATE
                              ${algebra_impl_includes}
+                             ${csc_tools_includes}
                              ${osqp_api_includes})
 
   # Pass upwards for accesibility from CUDA linear system solvers
   set(algebra_impl_includes "${algebra_impl_includes}" PARENT_SCOPE)
+  set(csc_tools_includes "${csc_tools_includes}" PARENT_SCOPE)
 
 else()
 

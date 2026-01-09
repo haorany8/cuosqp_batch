@@ -123,6 +123,19 @@ struct qdldl_cuda_batch {
      * @{
      */
     c_int   *h_perm;            ///< Permutation on host (for verification)
+    c_int   *h_PtoKKT;          ///< Map P elements to KKT (host copy)
+    c_int   *h_AtoKKT;          ///< Map A elements to KKT (host copy)
+    c_int   *h_rhotoKKT;        ///< Map rho to KKT diagonal (host copy)
+    c_int   *h_Pdiag_idx;       ///< Diagonal indices in P (host copy)
+    c_float *h_KKT_x;           ///< KKT values template (host copy)
+    /** @} */
+
+    /**
+     * @name Internal structures (opaque)
+     * @{
+     */
+    void    *gpu_pattern;       ///< Internal: GPUFactorPattern*
+    void    *gpu_workspace;     ///< Internal: GPUBatchWorkspace*
     /** @} */
 };
 

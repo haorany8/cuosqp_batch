@@ -22,6 +22,14 @@ set(direct_linsys_solvers
     $<TARGET_OBJECTS:qdldlobject>
 )
 
+# Add CUDA batch GPU solver if available
+if(TARGET linsys_qdldl_batch_gpu)
+    set(direct_linsys_solvers
+        ${direct_linsys_solvers}
+        $<TARGET_OBJECTS:linsys_qdldl_batch_gpu>
+    )
+endif()
+
 # NB. The second directory is added because we need to include the "qdldl_types.h" file in "qdldl_interface.h"
 set(direct_linsys_solvers_includes
     ${direct_linsys_solvers_includes}

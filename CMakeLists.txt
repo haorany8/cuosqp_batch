@@ -116,13 +116,17 @@ if (CUDA_SUPPORT)
     # cublas and cusparse headers
     include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
-    # sm_75 -> Turing support
+    # GPU architecture support: sm_75 (Turing), sm_86 (Ampere), and compute_86 PTX for forward compatibility (Ada, etc.)
     if (DFLOAT)
-        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --gpu-architecture=compute_52 --gpu-code=sm_52,sm_75")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_52,code=sm_52 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86")
     else()
         # To use doubles we need compute capability 6.0 for atomic operations
-        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --gpu-architecture=compute_60 --gpu-code=sm_60,sm_75")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_60,code=sm_60 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86")
     endif()
+
+    # Workaround for CUDA 11.5 / GCC 11 compatibility issue with thrust headers
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=-Wno-subobject-linkage --expt-extended-lambda")
+    set(CMAKE_CUDA_STANDARD 14)
 endif()
 
 
