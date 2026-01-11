@@ -19,6 +19,16 @@ if (NOT DEFINED EMBEDDED)
     )
 endif()
 
+# Add batched OSQP sources (requires CUDA support)
+if (CUDA_SUPPORT OR CMAKE_CUDA_COMPILER)
+    list(
+      APPEND
+      osqp_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/auxil_batch.c"
+      "${CMAKE_CURRENT_SOURCE_DIR}/osqp_api_batch.c"
+    )
+endif()
+
 # Add the ctrl-c handler if enabled
 if (CTRLC)
     list(

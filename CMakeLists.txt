@@ -126,6 +126,10 @@ if (CUDA_SUPPORT)
 
     # Workaround for CUDA 11.5 / GCC 11 compatibility issue with thrust headers
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=-Wno-subobject-linkage --expt-extended-lambda")
+    # Use GCC 10 via -ccbin to avoid std::function issues
+    if(EXISTS "/usr/bin/g++-10")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -ccbin /usr/bin/g++-10")
+    endif()
     set(CMAKE_CUDA_STANDARD 14)
 endif()
 

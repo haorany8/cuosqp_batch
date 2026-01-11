@@ -71,5 +71,25 @@ if(CUDA_SUPPORT OR CMAKE_CUDA_COMPILER)
                           POSITION_INDEPENDENT_CODE ON)
 
     message(STATUS "QDLDL batched GPU solver enabled")
+
+    # ADMM batched GPU kernels (separate from linear solver)
+    set(admm_batch_gpu_sources
+        ${CMAKE_SOURCE_DIR}/include/admm_batch_gpu.h
+        ${CMAKE_SOURCE_DIR}/src/admm_batch_gpu.cu
+    )
+
+    add_library(admm_batch_gpu OBJECT ${admm_batch_gpu_sources})
+
+    target_include_directories(admm_batch_gpu PRIVATE
+                               ${qdldl_interface_includes}
+                               ${csc_tools_includes}
+                               ${osqp_api_includes}
+                               ${kkt_common_includes})
+
+    set_target_properties(admm_batch_gpu PROPERTIES
+                          CUDA_SEPARABLE_COMPILATION ON
+                          POSITION_INDEPENDENT_CODE ON)
+
+    message(STATUS "ADMM batched GPU kernels enabled")
 endif()
 
