@@ -285,6 +285,39 @@ int gpu_batch_factor_solve_graph(
  */
 void gpu_free_graph(GPUBatchWorkspace* workspace);
 
+//=============================================================================
+// Per-Problem Rho Support
+//=============================================================================
+
+/**
+ * Update the -1/rho diagonal entries in KKT matrices per-problem
+ * This allows different rho values for each problem in the batch.
+ *
+ * The KKT matrix has structure:
+ *   [P + sigma*I,  A' ]
+ *   [A,           -1/rho * I]
+ *
+ * This function updates the -1/rho diagonal in the bottom-right block.
+ *
+ * @param  gpu_pattern    GPU pattern (contains KKT structure info)
+ * @param  workspace      GPU workspace with d_Ax already populated
+ * @param  d_rho          Device pointer to per-problem rho values [batch_size]
+ * @param  n              Primal dimension (first n columns have P+sigma*I)
+ * @param  m              Number of constraints (last m columns have -1/rho diag)
+ * @param  d_rho_inv_diag_indices  Device pointer to indices of -1/rho entries in KKT [m]
+ * @param  batch_size     Number of problems
+ * @return                0 on success
+ */
+int gpu_batch_update_rho(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      d_rho,
+    QDLDL_int               n,
+    QDLDL_int               m,
+    const QDLDL_int*        d_rho_inv_diag_indices,
+    int                     batch_size
+);
+
 #ifdef __cplusplus
 }
 #endif

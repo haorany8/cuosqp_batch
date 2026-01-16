@@ -91,5 +91,65 @@ if(CUDA_SUPPORT OR CMAKE_CUDA_COMPILER)
                           POSITION_INDEPENDENT_CODE ON)
 
     message(STATUS "ADMM batched GPU kernels enabled")
+
+    # SpMV batched GPU operations
+    set(spmv_batch_gpu_sources
+        ${CMAKE_SOURCE_DIR}/include/spmv_batch_gpu.h
+        ${CMAKE_SOURCE_DIR}/src/spmv_batch_gpu.cu
+    )
+
+    add_library(spmv_batch_gpu OBJECT ${spmv_batch_gpu_sources})
+
+    target_include_directories(spmv_batch_gpu PRIVATE
+                               ${qdldl_interface_includes}
+                               ${csc_tools_includes}
+                               ${osqp_api_includes}
+                               ${kkt_common_includes})
+
+    set_target_properties(spmv_batch_gpu PROPERTIES
+                          CUDA_SEPARABLE_COMPILATION ON
+                          POSITION_INDEPENDENT_CODE ON)
+
+    message(STATUS "SpMV batched GPU operations enabled")
+
+    # Residual batched GPU operations
+    set(residual_batch_gpu_sources
+        ${CMAKE_SOURCE_DIR}/include/residual_batch_gpu.h
+        ${CMAKE_SOURCE_DIR}/src/residual_batch_gpu.cu
+    )
+
+    add_library(residual_batch_gpu OBJECT ${residual_batch_gpu_sources})
+
+    target_include_directories(residual_batch_gpu PRIVATE
+                               ${qdldl_interface_includes}
+                               ${csc_tools_includes}
+                               ${osqp_api_includes}
+                               ${kkt_common_includes})
+
+    set_target_properties(residual_batch_gpu PROPERTIES
+                          CUDA_SEPARABLE_COMPILATION ON
+                          POSITION_INDEPENDENT_CODE ON)
+
+    message(STATUS "Residual batched GPU operations enabled")
+
+    # Termination batched GPU operations
+    set(termination_batch_gpu_sources
+        ${CMAKE_SOURCE_DIR}/include/termination_batch_gpu.h
+        ${CMAKE_SOURCE_DIR}/src/termination_batch_gpu.cu
+    )
+
+    add_library(termination_batch_gpu OBJECT ${termination_batch_gpu_sources})
+
+    target_include_directories(termination_batch_gpu PRIVATE
+                               ${qdldl_interface_includes}
+                               ${csc_tools_includes}
+                               ${osqp_api_includes}
+                               ${kkt_common_includes})
+
+    set_target_properties(termination_batch_gpu PROPERTIES
+                          CUDA_SEPARABLE_COMPILATION ON
+                          POSITION_INDEPENDENT_CODE ON)
+
+    message(STATUS "Termination batched GPU operations enabled")
 endif()
 

@@ -147,6 +147,18 @@ c_int osqp_batch_admm_iteration(OSQPBatchSolver* solver, c_int admm_iter);
 c_int osqp_batch_factorize(OSQPBatchSolver* solver);
 
 /**
+ * Update KKT values and refactorize (used for adaptive rho)
+ *
+ * @param solver      Batched solver
+ * @param new_KKTx    New KKT matrix values [nnz_KKT]
+ * @return            0 on success
+ */
+c_int osqp_batch_update_factorization(
+    OSQPBatchSolver* solver,
+    const c_float* new_KKTx
+);
+
+/**
  * Get solutions for all problems
  *
  * @param solver  Batched solver

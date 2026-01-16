@@ -14,6 +14,7 @@ extern "C" {
 
 #include "types.h"
 #include "qdldl_batch_gpu.h"
+#include "spmv_batch_gpu.h"
 
 /**
  * Extended workspace for batched ADMM iterations
@@ -33,6 +34,8 @@ typedef struct {
     c_float* d_y;            // [batch_size * m] dual variable
     c_float* d_delta_x;      // [batch_size * n]
     c_float* d_delta_y;      // [batch_size * m]
+    c_float* d_xtilde;       // [batch_size * n] xtilde from KKT solution (extracted)
+    c_float* d_ztilde;       // [batch_size * m] ztilde = A * xtilde
 
     // xz_tilde is stored in base_ws->d_x (RHS/solution buffer)
 
@@ -41,15 +44,24 @@ typedef struct {
     c_float* d_l;            // [batch_size * m] lower bounds
     c_float* d_u;            // [batch_size * m] upper bounds
 
-    // Shared across all problems
+    // Constraint matrix A (for computing ztilde = A * xtilde)
+    GPUSparseMatrix* A;      // A matrix on GPU
+
+    // Per-problem rho (for adaptive rho per problem)
+    c_float* d_rho_batch;        // [batch_size] rho per problem
+    c_float* d_rho_inv_batch;    // [batch_size] 1/rho per problem
+    c_int*   d_rho_inv_diag_indices;  // [m] indices of -1/rho entries in KKT
+
+    // Shared/default rho (used for initialization)
     c_float* d_rho_vec;      // [m] rho per constraint (or NULL if scalar)
     c_float* d_rho_inv_vec;  // [m] 1/rho per constraint (or NULL if scalar)
-    c_float  rho;            // scalar rho (used if d_rho_vec is NULL)
+    c_float  rho;            // default scalar rho
     c_float  rho_inv;        // 1/rho
     c_float  sigma;          // regularization parameter
     c_float  alpha;          // relaxation parameter
 
     int rho_is_vec;          // 1 if using rho_vec, 0 if using scalar rho
+    int use_per_problem_rho; // 1 if using per-problem rho
 } GPUBatchADMMWorkspace;
 
 /**
@@ -71,6 +83,23 @@ GPUBatchADMMWorkspace* alloc_gpu_admm_workspace(
  * Free ADMM workspace
  */
 void free_gpu_admm_workspace(GPUBatchADMMWorkspace* ws);
+
+/**
+ * Set the A matrix for computing ztilde = A * xtilde
+ * @param  ws          ADMM workspace
+ * @param  h_Ap        Host: column pointers [n+1]
+ * @param  h_Ai        Host: row indices [nnz]
+ * @param  h_Ax        Host: values [nnz]
+ * @param  nnz         Number of non-zeros in A
+ * @return             0 on success
+ */
+int gpu_admm_set_A_matrix(
+    GPUBatchADMMWorkspace* ws,
+    const c_int* h_Ap,
+    const c_int* h_Ai,
+    const c_float* h_Ax,
+    c_int nnz
+);
 
 /**
  * Copy problem data to device for batched ADMM
@@ -171,6 +200,76 @@ int gpu_batch_admm_iteration(
     const GPUFactorPattern* pattern,
     GPUBatchADMMWorkspace* ws,
     int admm_iter
+);
+
+//=============================================================================
+// Per-Problem Rho Support
+//=============================================================================
+
+/**
+ * Initialize per-problem rho arrays and KKT diagonal indices
+ * Call this once during setup to enable per-problem rho adaptation.
+ *
+ * @param  ws         ADMM workspace
+ * @param  h_KKTp     Host: KKT column pointers [n+m+1]
+ * @param  h_KKTi     Host: KKT row indices [nnz_KKT]
+ * @param  n          Primal dimension
+ * @param  m          Number of constraints
+ * @param  initial_rho  Initial rho value for all problems
+ * @return            0 on success
+ */
+int gpu_admm_init_per_problem_rho(
+    GPUBatchADMMWorkspace* ws,
+    const c_int* h_KKTp,
+    const c_int* h_KKTi,
+    c_int n,
+    c_int m,
+    c_float initial_rho
+);
+
+/**
+ * Update rho for a specific problem
+ * This updates both the ADMM workspace and the KKT matrix diagonal.
+ * Call gpu_batch_factorize after updating rho values.
+ *
+ * @param  ws           ADMM workspace
+ * @param  gpu_pattern  GPU factorization pattern
+ * @param  problem_idx  Index of problem to update (0 to batch_size-1)
+ * @param  new_rho      New rho value
+ * @return              0 on success
+ */
+int gpu_admm_update_problem_rho(
+    GPUBatchADMMWorkspace* ws,
+    const GPUFactorPattern* gpu_pattern,
+    c_int problem_idx,
+    c_float new_rho
+);
+
+/**
+ * Update rho for all problems at once
+ * This updates both the ADMM workspace and all KKT matrix diagonals.
+ * Call gpu_batch_factorize after updating rho values.
+ *
+ * @param  ws           ADMM workspace
+ * @param  gpu_pattern  GPU factorization pattern
+ * @param  h_new_rho    Host: new rho values [batch_size]
+ * @return              0 on success
+ */
+int gpu_admm_update_all_rho(
+    GPUBatchADMMWorkspace* ws,
+    const GPUFactorPattern* gpu_pattern,
+    const c_float* h_new_rho
+);
+
+/**
+ * Get current rho values from device
+ * @param  ws         ADMM workspace
+ * @param  h_rho      Host buffer for rho values [batch_size]
+ * @return            0 on success
+ */
+int gpu_admm_get_rho(
+    GPUBatchADMMWorkspace* ws,
+    c_float* h_rho
 );
 
 #ifdef __cplusplus

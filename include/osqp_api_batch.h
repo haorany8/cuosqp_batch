@@ -48,6 +48,11 @@ typedef struct {
     c_int   check_termination;  // Check convergence every N iterations
     c_int   warm_start;         // Enable warm starting
     c_int   verbose;            // Print progress
+    c_int   scaling;            // Enable Ruiz equilibration (default: 10 iterations, 0 = disabled)
+    c_int   adaptive_rho;       // Enable adaptive rho (default: 1)
+    c_int   adaptive_rho_interval;    // Interval for rho adaptation (default: 25)
+    c_float adaptive_rho_tolerance;   // Tolerance for rho adaptation (default: 5.0)
+    c_int   per_problem_rho;    // Enable per-problem rho adaptation (default: 1)
 } OSQPBatchSettings;
 
 /**
@@ -194,6 +199,38 @@ c_int osqp_batch_get_batch_size(const OSQPBatchSolverAPI* solver);
  * @param m       Output: constraint dimension (can be NULL)
  */
 void osqp_batch_get_dimensions(const OSQPBatchSolverAPI* solver, c_int* n, c_int* m);
+
+/**
+ * Get status for a specific problem in the batch
+ *
+ * @param solver  Batch solver handle
+ * @param idx     Problem index (0 to batch_size-1)
+ * @return        Status code (OSQP_SOLVED, OSQP_MAX_ITER_REACHED, etc.)
+ */
+c_int osqp_batch_get_problem_status(const OSQPBatchSolverAPI* solver, c_int idx);
+
+/**
+ * Get residuals for a specific problem in the batch
+ *
+ * @param solver   Batch solver handle
+ * @param idx      Problem index (0 to batch_size-1)
+ * @param pri_res  Output: primal residual (can be NULL)
+ * @param dua_res  Output: dual residual (can be NULL)
+ */
+void osqp_batch_get_problem_residuals(
+    const OSQPBatchSolverAPI* solver,
+    c_int idx,
+    c_float* pri_res,
+    c_float* dua_res
+);
+
+/**
+ * Get the number of converged problems
+ *
+ * @param solver  Batch solver handle
+ * @return        Number of converged problems
+ */
+c_int osqp_batch_get_num_converged(const OSQPBatchSolverAPI* solver);
 
 #ifdef __cplusplus
 }

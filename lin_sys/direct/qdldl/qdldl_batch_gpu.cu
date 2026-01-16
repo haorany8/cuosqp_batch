@@ -832,4 +832,75 @@ void gpu_free_graph(GPUBatchWorkspace* workspace) {
     }
 }
 
+//=============================================================================
+// Per-Problem Rho Support
+//=============================================================================
+
+/**
+ * Kernel to update -1/rho diagonal entries per-problem
+ * Each thread handles one problem in the batch
+ */
+__global__ void kernel_batch_update_rho(
+    QDLDL_float* d_Ax,              // [batch_size * nnz_KKT]
+    const QDLDL_float* d_rho,       // [batch_size]
+    const QDLDL_int* d_rho_inv_diag_indices,  // [m] indices of -1/rho entries
+    QDLDL_int m,                    // Number of constraints
+    QDLDL_int nnz_KKT,              // Stride per problem
+    int batch_size
+) {
+    int batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (batch_idx >= batch_size) return;
+
+    QDLDL_float rho = d_rho[batch_idx];
+    QDLDL_float rho_inv = (QDLDL_float)1.0 / rho;
+    QDLDL_float* Ax = d_Ax + batch_idx * nnz_KKT;
+
+    // Update each -1/rho diagonal entry
+    for (QDLDL_int i = 0; i < m; i++) {
+        QDLDL_int idx = d_rho_inv_diag_indices[i];
+        Ax[idx] = -rho_inv;
+    }
+}
+
+int gpu_batch_update_rho(
+    const GPUFactorPattern* gpu_pattern,
+    GPUBatchWorkspace*      workspace,
+    const QDLDL_float*      d_rho,
+    QDLDL_int               n,
+    QDLDL_int               m,
+    const QDLDL_int*        d_rho_inv_diag_indices,
+    int                     batch_size
+) {
+    (void)n;  // unused, kept for clarity
+
+    if (!gpu_pattern || !workspace || !d_rho || !d_rho_inv_diag_indices) {
+        return -1;
+    }
+
+    if (!workspace->d_Ax) {
+        fprintf(stderr, "Error: d_Ax not allocated. Call gpu_batch_factor_broadcast_host first.\n");
+        return -1;
+    }
+
+    int threads_per_block = 256;
+    int num_blocks = (batch_size + threads_per_block - 1) / threads_per_block;
+
+    kernel_batch_update_rho<<<num_blocks, threads_per_block>>>(
+        workspace->d_Ax,
+        d_rho,
+        d_rho_inv_diag_indices,
+        m,
+        gpu_pattern->nnz_KKT,
+        batch_size
+    );
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA kernel error: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+
+    return 0;
+}
+
 } // extern "C"

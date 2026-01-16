@@ -26,6 +26,7 @@ if (CUDA_SUPPORT OR CMAKE_CUDA_COMPILER)
       osqp_src
       "${CMAKE_CURRENT_SOURCE_DIR}/auxil_batch.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/osqp_api_batch.c"
+      "${CMAKE_CURRENT_SOURCE_DIR}/scaling_batch.c"
     )
 endif()
 

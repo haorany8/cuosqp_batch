@@ -217,6 +217,31 @@ c_int osqp_batch_factorize(OSQPBatchSolver* solver) {
     return ret;
 }
 
+c_int osqp_batch_update_factorization(
+    OSQPBatchSolver* solver,
+    const c_float* new_KKTx
+) {
+    if (!solver || !solver->is_initialized || !new_KKTx) return -1;
+
+    // Update host KKT values
+    memcpy(solver->h_kkt_Ax, new_KKTx, solver->nnz_KKT * sizeof(c_float));
+
+    // Broadcast new values to GPU
+    int ret = gpu_batch_factor_broadcast_host(
+        solver->gpu_pattern,
+        solver->base_ws,
+        solver->h_kkt_Ax,
+        solver->batch_size
+    );
+    if (ret != 0) return ret;
+
+    // Mark as needing refactorization
+    solver->is_factorized = 0;
+
+    // Refactorize
+    return osqp_batch_factorize(solver);
+}
+
 c_int osqp_batch_admm_iteration(OSQPBatchSolver* solver, c_int admm_iter) {
     if (!solver || !solver->is_initialized) return -1;
 

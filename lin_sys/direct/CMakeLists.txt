@@ -38,6 +38,30 @@ if(TARGET admm_batch_gpu)
     )
 endif()
 
+# Add SpMV batched GPU operations if available
+if(TARGET spmv_batch_gpu)
+    set(direct_linsys_solvers
+        ${direct_linsys_solvers}
+        $<TARGET_OBJECTS:spmv_batch_gpu>
+    )
+endif()
+
+# Add Residual batched GPU operations if available
+if(TARGET residual_batch_gpu)
+    set(direct_linsys_solvers
+        ${direct_linsys_solvers}
+        $<TARGET_OBJECTS:residual_batch_gpu>
+    )
+endif()
+
+# Add Termination batched GPU operations if available
+if(TARGET termination_batch_gpu)
+    set(direct_linsys_solvers
+        ${direct_linsys_solvers}
+        $<TARGET_OBJECTS:termination_batch_gpu>
+    )
+endif()
+
 # NB. The second directory is added because we need to include the "qdldl_types.h" file in "qdldl_interface.h"
 set(direct_linsys_solvers_includes
     ${direct_linsys_solvers_includes}
